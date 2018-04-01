@@ -13,9 +13,12 @@
 #define DIAGONAL 0
 #define UP 1
 #define NIL INT_MAX
+#define POSTHRESH 1.0
+#define NEGTHRESH -1.0
 
 using namespace std;
 typedef int DIRECTION;
+int createdFrameLength = 500;
 
 vector<double> readData(const string &filename)
 {
@@ -26,12 +29,21 @@ vector<double> readData(const string &filename)
         exit(-1);
     }
     vector<double> signal;
+    double t,s;
     while (!file.eof()) {
-        double t,s;
         file >> t >> s;
         signal.push_back(s);
     }
+    cout << filename << " ";
     return signal;
+}
+
+vector<double> butterworthLowPass(const vector<double> &signal)
+{
+    // not implemented, just returns the original signal.
+    vector<double> filtered(signal.size());
+    copy(signal.begin(),signal.end(),filtered.begin());
+    return filtered;
 }
 
 double dist(double a, double b)
@@ -57,7 +69,10 @@ double dtwDistance(const vector<double> &signal1, const vector<double> &signal2)
             dtw[i][j] = cost + min(dtw[i-1][j],min(dtw[i][j-1],dtw[i-1][j-1]));
         }
     }
-    return dtw[n1][n2];
+    double result = dtw[n1][n2];
+    for (int i=0;i<n1+1;++i) delete dtw[i];
+    delete [] dtw;
+    return result;
 }
 
 DIRECTION argmin_Direction(double diag, double up, double left)
@@ -84,7 +99,7 @@ double barycenter(const vector<double> &tab)
     return sum / tab.size();
 }
 
-void sequenceAverage(const vector<vector<double> > sequences, vector<double> &center)
+void DBA(const vector<vector<double> > sequences, vector<double> &center)
 {
     int T = sequences[0].size();
     int T_ = center.size();
@@ -207,7 +222,7 @@ void Kmeans(const vector<vector<double> > &sequences, int k, vector<vector<doubl
             assert(cluster.size()>0);
             if (cluster.size()>1) {
                 vector<double> center = cluster[0];
-                sequenceAverage(cluster,center);
+                DBA(cluster,center);
                 centroids[j] = center;
             }
             else {
@@ -231,10 +246,12 @@ int smallestCluster(const vector<vector<double> > &sequences, const vector<vecto
                 n++;
             }
         }
+
         value = value / n;
+        cout << "cluster " << i << " has a size of " << n << " and average distance in cluster is " << value << endl;
         if (value < minvalue) {
             minvalue = value;
-            c = n;
+            c = i;
         }
     }
     return c;
@@ -242,12 +259,14 @@ int smallestCluster(const vector<vector<double> > &sequences, const vector<vecto
 
 void pruning(const vector<vector<double> > &sequences, int k, vector<vector<double> > &templates, int maxNumTemplates)
 {
+    cout << "\nPRUNING STARTS - size of templates before: " << sequences.size() << endl;
     vector<vector<double> > centroids;
     for (int i=0;i<k;++i)
         centroids.push_back(sequences[i]);
     vector<int> belonging(sequences.size(),0);
     Kmeans(sequences,k,centroids,belonging);
     int c = smallestCluster(sequences,centroids,belonging);
+    cout << "smallest cluster found: " << c << endl;
     for (int i=0;i<sequences.size();++i) {
         if (belonging[i] == c) {
             if (templates.size()<maxNumTemplates)
@@ -255,31 +274,107 @@ void pruning(const vector<vector<double> > &sequences, int k, vector<vector<doub
             else {
                 // check if sequences[i] should be put into templates;
                 double maxdist = -DBL_MAX;
-                int c = -1;
-                double sum = 0;
+                int r = -1;
+                double sum;
                 for (int j=0;j<templates.size();++j) {
-                    for (int k=0;k<templates.size();++k) {
-                        if (j!=k) {
-                            sum += dtwDistance(templates[j],templates[k]);
+                    sum = 0.0;
+                    for (int l=0;l<templates.size();++l) {
+                        if (j!=l) {
+                            sum += dtwDistance(templates[j],templates[l]);
                         }
                     }
                     if (sum > maxdist) {
                         maxdist = sum;
-                        c = j;
+                        r = j;
                     }
                 }
                 sum = 0;
                 for (int j=0;j<templates.size();++j) {
-                    if (j!=c) {
+                    if (j!=r) {
                         sum += dtwDistance(sequences[i],templates[j]);
                     }
                 }
                 if (sum < maxdist) {
-                    templates[c] = sequences[i];
+                    cout << "templates " << r << " replaced by sequences " << i << endl;
+                    templates[r] = sequences[i];
                 }
             }
         }
     }
+    cout << "PRUNING FINISHED - size of templates after: " << templates.size() << endl;
+}
+
+bool detectPeak(double a, double &posVal, double &negVal)
+{
+    bool isPeak = false;
+    if (a >= POSTHRESH) {
+        if (a >= posVal)
+            posVal = a;
+        else
+            isPeak = true;
+    }
+    else if (a < POSTHRESH and posVal > 0)
+        isPeak = true;
+    if (a <= NEGTHRESH) {
+        if (a <= negVal)
+            negVal = a;
+        else
+            isPeak = true;
+    }
+    else if (a > NEGTHRESH && negVal < 0)
+        isPeak = true;
+    return isPeak;
+}
+
+void analyzeData(const vector<double> &Rz, const vector<double> &Ax, const vector<double> &Ay, vector<vector<double> > &events)
+{
+    int n = min(Rz.size(),min(Ax.size(),Ay.size()));
+    double lastYPosVal, lastYNegVal, lastXPosVal, lastXNegVal;
+    lastYPosVal = lastXPosVal = lastYNegVal = lastXNegVal = 0.0;
+    bool isYPeak, isXPeak;
+    isYPeak = isXPeak = false;
+    for (int i=0;i<n-createdFrameLength;++i) {
+        isYPeak = detectPeak(Ay[i],lastYPosVal,lastYNegVal);
+        if (isYPeak) {
+            isXPeak = detectPeak(Ax[i],lastXPosVal,lastXNegVal);
+        }
+        if (isYPeak and isXPeak) {
+            // create event frame
+            vector<double> rz(createdFrameLength),ax(createdFrameLength),ay(createdFrameLength);
+            copy(Rz.begin()+i,Rz.begin()+i+createdFrameLength,rz.begin());
+            copy(Ax.begin()+i,Ax.begin()+i+createdFrameLength,ax.begin());
+            copy(Ay.begin()+i,Ay.begin()+i+createdFrameLength,ay.begin());
+            events.push_back(rz);
+            events.push_back(ax);
+            events.push_back(ay);
+            i += createdFrameLength;
+            lastYPosVal = lastXPosVal = lastYNegVal = lastXNegVal = 0.0;
+        }
+    }
+}
+
+
+double distanceRatio(const vector<double> &sequence, const vector<vector<double> > &templates)
+{
+    double mindist = DBL_MAX;
+    double maxdist = -DBL_MAX;
+    for (int i=0;i<templates.size();++i) {
+        double d = dtwDistance(sequence,templates[i]);
+        if (d < mindist) mindist = d;
+        else if (d > maxdist) maxdist = d;
+    }
+    return mindist / maxdist;
+}
+
+double similarityBetweenEventAndTemplates(const vector<vector<double> > &event,
+                                          const vector<vector<double> > &axTemplates,
+                                          const vector<vector<double> > &ayTemplates,
+                                          const vector<vector<double> > &rzTemplates)
+{
+    double Dzr = distanceRatio(event[0],rzTemplates);
+    double Dxr = distanceRatio(event[1],axTemplates);
+    double Dyr = distanceRatio(event[2],ayTemplates);
+    return sqrt(Dzr*Dzr + Dxr*Dxr + Dyr*Dyr);
 }
 
 vector<string> readFileList(string fname)
@@ -295,9 +390,9 @@ vector<string> readFileList(string fname)
     }
     while (!ifs.eof()) {
         ifs >> tstno >> rz >> ax >> ay;
+        namelist.push_back("data/ROTAT/"+rz);
         namelist.push_back("data/XAXIS/"+ax);
         namelist.push_back("data/YAXIS/"+ay);
-        namelist.push_back("data/ROTAT/"+rz);
     }
     return namelist;
 }
@@ -305,39 +400,20 @@ vector<string> readFileList(string fname)
 void loadData(const vector<string> &filenames, vector<vector<double> > &sequences)
 {
     int numFiles = filenames.size();
+    assert(numFiles%3==0);
     for (int i=0;i<numFiles;i=i+3) {
+        cout << "loading: ";
         sequences.push_back(readData(filenames[i]));
         sequences.push_back(readData(filenames[i+1]));
         sequences.push_back(readData(filenames[i+2]));
+        cout << endl;
     }
-}
-
-void test()
-{
-    vector<double> data1 = readData("v10178_001aa0.tsv");
-    vector<double> data2 = readData("v10178_004aa0.tsv");
-    vector<double> data3 = readData("v10179_001aa0.tsv");
-
-    vector<double> seq1(1000), seq2(1000), seq3(1000);
-    copy(data1.begin(),data1.begin()+1000,seq1.begin());
-    copy(data2.begin(),data2.begin()+1000,seq2.begin());
-    copy(data3.begin(),data3.begin()+1000,seq3.begin());
-
-    vector<vector<double> > sequences;
-    sequences.push_back(seq1);
-    sequences.push_back(seq2);
-    sequences.push_back(seq3);
-
-    vector<vector<double> > templates;
-    pruning(sequences,2,templates,10);
 }
 
 int main()
 {
-    //test();
-    /* Main function shows how to create templates for front impact */
     /**
-    Main function shows how to create templates for front impact
+    Main function shows how to create templates for front impact and predict new impact samples
     "front-impact-templates.txt" has a format like:
     [TSTNO]   [Rz-file] [Ax-file] [Ay-file]
     */
@@ -345,17 +421,37 @@ int main()
 
     vector<string> frontImapctFiles = readFileList("front-impact-templates.txt");
     vector<vector<double> > sequences;
+
     loadData(frontImapctFiles,sequences);
-    vector<vector<double> > ax,ay,rz;
+
+    vector<vector<double> > events;
     for (int i=0;i<sequences.size();i=i+3) {
-        rz.push_back(sequences[i]);
-        ax.push_back(sequences[i+1]);
-        ay.push_back(sequences[i+2]);
+        analyzeData(sequences[i],sequences[i+1],sequences[i+2],events);
     }
+
+    vector<vector<double> > ax,ay,rz;
+    for (int i=0;i<events.size();i=i+3) {
+        rz.push_back(events[i]);
+        ax.push_back(events[i+1]);
+        ay.push_back(events[i+2]);
+    }
+
     vector<vector<double> > axTemplates, ayTemplates, rzTemplates;
     pruning(rz,2,rzTemplates,10);
     pruning(ax,2,axTemplates,10);
     pruning(ay,2,ayTemplates,10);
+
+    // load a new front impact sample
+    vector<vector<double> > data;
+    vector<string> dataFiles;
+    dataFiles.push_back("v10000_103va0.tsv");
+    dataFiles.push_back("v10000_001aa0.tsv");
+    dataFiles.push_back("v10000_002aa0.tsv");
+    loadData(dataFiles,data);
+    vector<vector<double> > e;
+    analyzeData(data[0],data[1],data[2],e);
+    double sim = similarityBetweenEventAndTemplates(e,axTemplates,ayTemplates,rzTemplates);
+    cout << "\nsimilarity: " << sim << endl;
 
     return 0;
 }
