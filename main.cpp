@@ -18,7 +18,7 @@
 
 using namespace std;
 typedef int DIRECTION;
-int createdFrameLength = 500;
+int createdFrameLength = 800;
 
 vector<double> readData(const string &filename)
 {
@@ -267,36 +267,46 @@ void pruning(const vector<vector<double> > &sequences, int k, vector<vector<doub
     Kmeans(sequences,k,centroids,belonging);
     int c = smallestCluster(sequences,centroids,belonging);
     cout << "smallest cluster found: " << c << endl;
+    vector<double> templateDistances;
     for (int i=0;i<sequences.size();++i) {
         if (belonging[i] == c) {
-            if (templates.size()<maxNumTemplates)
+            if (templates.size()<maxNumTemplates) {
                 templates.push_back(sequences[i]);
+                if (templates.size()==maxNumTemplates) {
+                    // 计算每个template到其他templates的距离。
+                    for (int j=0;j<maxNumTemplates;++j) {
+                        double sum = 0;
+                        for (int l=0;l<maxNumTemplates;++l) {
+                            if (l!=j) {
+                                sum += dtwDistance(templates[j],templates[l]);
+                            }
+                        }
+                        templateDistances.push_back(sum);
+                    }
+                }
+            }
             else {
-                // check if sequences[i] should be put into templates;
+                // 计算sequences[i]是否可以替换templates[j];
                 double maxdist = -DBL_MAX;
                 int r = -1;
-                double sum;
-                for (int j=0;j<templates.size();++j) {
-                    sum = 0.0;
-                    for (int l=0;l<templates.size();++l) {
-                        if (j!=l) {
-                            sum += dtwDistance(templates[j],templates[l]);
-                        }
-                    }
-                    if (sum > maxdist) {
-                        maxdist = sum;
+                for (int j=0;j<templateDistances.size();++j) {
+                    if (templateDistances[j]>maxdist) {
+                        maxdist = templateDistances[j];
                         r = j;
                     }
                 }
-                sum = 0;
+                // 计算i到除r之外的templates的距离和。
+                double sum = 0;
                 for (int j=0;j<templates.size();++j) {
                     if (j!=r) {
                         sum += dtwDistance(sequences[i],templates[j]);
                     }
                 }
-                if (sum < maxdist) {
+                // 替换i和r；
+                if (sum < maxdist && r != -1) {
                     cout << "templates " << r << " replaced by sequences " << i << endl;
                     templates[r] = sequences[i];
+                    templateDistances[r] = sum;
                 }
             }
         }
@@ -450,8 +460,15 @@ int main()
     loadData(dataFiles,data);
     vector<vector<double> > e;
     analyzeData(data[0],data[1],data[2],e);
-    double sim = similarityBetweenEventAndTemplates(e,axTemplates,ayTemplates,rzTemplates);
-    cout << "\nsimilarity: " << sim << endl;
+
+    for (int i=0;i<e.size();i=i+3) {
+        vector<vector<double> > sample(3);
+        sample[0] = e[i];
+        sample[1] = e[i+1];
+        sample[2] = e[i+2];
+        double sim = similarityBetweenEventAndTemplates(sample,axTemplates,ayTemplates,rzTemplates);
+        cout << "\nsimilarity of " << i / 3 << " event: " << sim << endl;
+    }
 
     return 0;
 }
