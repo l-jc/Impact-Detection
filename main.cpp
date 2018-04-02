@@ -8,35 +8,24 @@
 #include <cmath>
 #include <climits>
 #include <assert.h>
+#include "ButterworthLP.h"
 
 #define LEFT -1
 #define DIAGONAL 0
 #define UP 1
 #define NIL INT_MAX
-#define POSTHRESH 1.0
-#define NEGTHRESH -1.0
+#define POS_THRESH 1.0
+#define NEG_THRESH -1.0
+
+#define SAMPLE_RATE 12500
+#define CUTOFF_RATE 20
+#define FILTER_OREDER 1
+#define EVENT_LENGTH 0.1
+#define CREATED_FRAME_LENGTH SAMPLE_RATE * EVENT_LENGTH
 
 using namespace std;
 typedef int DIRECTION;
-int createdFrameLength = 800;
 
-vector<double> readData(const string &filename)
-{
-    ifstream file;
-    file.open(filename);
-    if (!file) {
-        cerr << "file not found: " << filename << endl;
-        exit(-1);
-    }
-    vector<double> signal;
-    double t,s;
-    while (!file.eof()) {
-        file >> t >> s;
-        signal.push_back(s);
-    }
-    cout << filename << " ";
-    return signal;
-}
 
 vector<double> butterworthLowPass(const vector<double> &signal)
 {
@@ -94,7 +83,7 @@ DIRECTION argmin_Direction(double diag, double up, double left)
 double barycenter(const vector<double> &tab)
 {
     double sum = 0.0;
-    for (int i=0;i<tab.size();++i)
+    for (unsigned int i=0;i<tab.size();++i)
         sum += tab[i];
     return sum / tab.size();
 }
@@ -191,12 +180,13 @@ void Kmeans(const vector<vector<double> > &sequences, int k, vector<vector<doubl
     int T = sequences[0].size();
     int N = sequences.size();
 
-    for (int i=0;i<N;++i) belonging[i] = 0; // åˆå§‹è®¤ä¸ºæ‰€æœ‰ç‚¹å±žäºŽç¬¬ä¸€ä¸ªclusterã€‚
+    for (int i=0;i<N;++i) belonging[i] = 0; // ³õÊ¼ÈÏÎªËùÓÐµãÊôÓÚµÚÒ»¸öcluster¡£
 
     bool change = true;
     int numIter = 0;
     while (change) {
         change = false;
+        numIter++;
         for (int i=0;i<N;++i) {
             double mindist = DBL_MAX;
             int c = -1;
@@ -230,6 +220,7 @@ void Kmeans(const vector<vector<double> > &sequences, int k, vector<vector<doubl
             }
         }
     }
+    cout << "Kmeans: " << numIter << " iterations." << endl;
 }
 
 int smallestCluster(const vector<vector<double> > &sequences, const vector<vector<double> > &centroids, const vector<int> &belonging)
@@ -273,7 +264,7 @@ void pruning(const vector<vector<double> > &sequences, int k, vector<vector<doub
             if (templates.size()<maxNumTemplates) {
                 templates.push_back(sequences[i]);
                 if (templates.size()==maxNumTemplates) {
-                    // è®¡ç®—æ¯ä¸ªtemplateåˆ°å…¶ä»–templatesçš„è·ç¦»ã€‚
+                    // ¼ÆËãÃ¿¸ötemplateµ½ÆäËûtemplatesµÄ¾àÀë¡£
                     for (int j=0;j<maxNumTemplates;++j) {
                         double sum = 0;
                         for (int l=0;l<maxNumTemplates;++l) {
@@ -286,7 +277,7 @@ void pruning(const vector<vector<double> > &sequences, int k, vector<vector<doub
                 }
             }
             else {
-                // è®¡ç®—sequences[i]æ˜¯å¦å¯ä»¥æ›¿æ¢templates[j];
+                // ¼ÆËãsequences[i]ÊÇ·ñ¿ÉÒÔÌæ»»templates[j];
                 double maxdist = -DBL_MAX;
                 int r = -1;
                 for (int j=0;j<templateDistances.size();++j) {
@@ -295,14 +286,14 @@ void pruning(const vector<vector<double> > &sequences, int k, vector<vector<doub
                         r = j;
                     }
                 }
-                // è®¡ç®—iåˆ°é™¤rä¹‹å¤–çš„templatesçš„è·ç¦»å’Œã€‚
+                // ¼ÆËãiµ½³ýrÖ®ÍâµÄtemplatesµÄ¾àÀëºÍ¡£
                 double sum = 0;
                 for (int j=0;j<templates.size();++j) {
                     if (j!=r) {
                         sum += dtwDistance(sequences[i],templates[j]);
                     }
                 }
-                // æ›¿æ¢iå’Œrï¼›
+                // Ìæ»»iºÍr£»
                 if (sum < maxdist && r != -1) {
                     cout << "templates " << r << " replaced by sequences " << i << endl;
                     templates[r] = sequences[i];
@@ -317,21 +308,21 @@ void pruning(const vector<vector<double> > &sequences, int k, vector<vector<doub
 bool detectPeak(double a, double &posVal, double &negVal)
 {
     bool isPeak = false;
-    if (a >= POSTHRESH) {
+    if (a >= POS_THRESH) {
         if (a >= posVal)
             posVal = a;
         else
             isPeak = true;
     }
-    else if (a < POSTHRESH and posVal > 0)
+    else if (a < POS_THRESH and posVal > 0)
         isPeak = true;
-    if (a <= NEGTHRESH) {
+    if (a <= NEG_THRESH) {
         if (a <= negVal)
             negVal = a;
         else
             isPeak = true;
     }
-    else if (a > NEGTHRESH && negVal < 0)
+    else if (a > NEG_THRESH && negVal < 0)
         isPeak = true;
     return isPeak;
 }
@@ -343,26 +334,25 @@ void analyzeData(const vector<double> &Rz, const vector<double> &Ax, const vecto
     lastYPosVal = lastXPosVal = lastYNegVal = lastXNegVal = 0.0;
     bool isYPeak, isXPeak;
     isYPeak = isXPeak = false;
-    for (int i=0;i<n-createdFrameLength;++i) {
+    for (int i=0;i<n-CREATED_FRAME_LENGTH;++i) {
         isYPeak = detectPeak(Ay[i],lastYPosVal,lastYNegVal);
         if (isYPeak) {
             isXPeak = detectPeak(Ax[i],lastXPosVal,lastXNegVal);
         }
         if (isYPeak and isXPeak) {
             // create event frame
-            vector<double> rz(createdFrameLength),ax(createdFrameLength),ay(createdFrameLength);
-            copy(Rz.begin()+i,Rz.begin()+i+createdFrameLength,rz.begin());
-            copy(Ax.begin()+i,Ax.begin()+i+createdFrameLength,ax.begin());
-            copy(Ay.begin()+i,Ay.begin()+i+createdFrameLength,ay.begin());
+            vector<double> rz(CREATED_FRAME_LENGTH),ax(CREATED_FRAME_LENGTH),ay(CREATED_FRAME_LENGTH);
+            copy(Rz.begin()+i,Rz.begin()+i+CREATED_FRAME_LENGTH,rz.begin());
+            copy(Ax.begin()+i,Ax.begin()+i+CREATED_FRAME_LENGTH,ax.begin());
+            copy(Ay.begin()+i,Ay.begin()+i+CREATED_FRAME_LENGTH,ay.begin());
             events.push_back(rz);
             events.push_back(ax);
             events.push_back(ay);
-            i += createdFrameLength;
+            i += CREATED_FRAME_LENGTH;
             lastYPosVal = lastXPosVal = lastYNegVal = lastXNegVal = 0.0;
         }
     }
 }
-
 
 double distanceRatio(const vector<double> &sequence, const vector<vector<double> > &templates)
 {
@@ -387,6 +377,28 @@ double similarityBetweenEventAndTemplates(const vector<vector<double> > &event,
     return sqrt(Dzr*Dzr + Dxr*Dxr + Dyr*Dyr);
 }
 
+vector<double> readData(const string &filename, ButterworthLP *bw)
+{
+    ifstream file;
+    file.open(filename);
+    if (!file) {
+        cerr << "file not found: " << filename << endl;
+        exit(-1);
+    }
+    vector<double> signal;
+    double t,s;
+    while (!file.eof()) {
+        file >> t >> s;
+        signal.push_back(s);
+    }
+    cout << filename << " ";
+
+    vector<double> fsignal(signal.size());
+    (*bw).vecfilter(signal, fsignal, signal.size(), 5.5, true);
+
+    return fsignal;
+}
+
 vector<string> readFileList(string fname)
 {
     int tstno;
@@ -401,21 +413,23 @@ vector<string> readFileList(string fname)
     while (!ifs.eof()) {
         ifs >> tstno >> rz >> ax >> ay;
         namelist.push_back("data/ROTAT/"+rz);
-        namelist.push_back("data/XAXIS/"+ax);
-        namelist.push_back("data/YAXIS/"+ay);
+        namelist.push_back("data/FXAXIS/"+ax);
+        namelist.push_back("data/FYAXIS/"+ay);
     }
     return namelist;
 }
 
 void loadData(const vector<string> &filenames, vector<vector<double> > &sequences)
 {
+    ButterworthLP bw = ButterworthLP(SAMPLE_RATE,CUTOFF_RATE,FILTER_OREDER);
+    bw.stepInitialization(0);
     int numFiles = filenames.size();
     assert(numFiles%3==0);
     for (int i=0;i<numFiles;i=i+3) {
         cout << "loading: ";
-        sequences.push_back(readData(filenames[i]));
-        sequences.push_back(readData(filenames[i+1]));
-        sequences.push_back(readData(filenames[i+2]));
+        sequences.push_back(readData(filenames[i],&bw));
+        sequences.push_back(readData(filenames[i+1],&bw));
+        sequences.push_back(readData(filenames[i+2],&bw));
         cout << endl;
     }
 }
